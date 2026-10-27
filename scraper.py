@@ -5,25 +5,48 @@ import time
 from datetime import datetime, timedelta
 import pandas as pd
 import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util import Retry
 import urllib3
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 BASE_URL = "https://snia.mop.gob.cl/dgasat/pages/dgasat_param/"
-USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120 Safari/537.36"
+HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36",
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+    "Accept-Language": "es-CL,es;q=0.9,en-US;q=0.8,en;q=0.7",
+    "Connection": "keep-alive",
+    "Sec-Fetch-Dest": "document",
+    "Sec-Fetch-Mode": "navigate",
+    "Sec-Fetch-Site": "none",
+    "Sec-Fetch-User": "?1",
+    "Upgrade-Insecure-Requests": "1"
+}
 DATE_REGEX = re.compile(r"\d{2}/\d{2}/\d{4}\s+\d{1,2}:\d{2}")
 DATE_FMT = "%d/%m/%Y"
+TIMEOUT_CONFIG = (15, 60)  # 15s para conectar, 60s para recibir respuesta
 
 
 def nueva_sesion():
+    """Genera una sesión HTTP con reintentos automáticos y soporte para el servidor DGA."""
     s = requests.Session()
     s.verify = False
-    s.headers.update({
-        "User-Agent": USER_AGENT,
-        "Accept": "text/html,*/*",
-        "Accept-Language": "es-CL,es;q=0.9"
-    })
-    s.get(BASE_URL + "dgasat_param.jsp?param=1", timeout=30)
+    s.headers.update(HEADERS)
+
+    # Reintentos con retroceso exponencial ante inestabilidad del servidor
+    reintentos = Retry(
+        total=3,
+        backoff_factor=2,
+        status_forcelist=[500, 502, 503, 504],
+        raise_on_status=False
+    )
+    adapter = HTTPAdapter(max_retries=reintentos)
+    s.mount("https://", adapter)
+    s.mount("http://", adapter)
+
+    # Handshake inicial para adquirir la cookie JSESSIONID
+    s.get(BASE_URL + "dgasat_param.jsp?param=1", timeout=TIMEOUT_CONFIG)
     return s
 
 
@@ -42,11 +65,10 @@ def _payload_form(codigos, desde, hasta):
 
 def consultar_lote_dgasat(sesion, codigos, desde, hasta):
     base_data = _payload_form(codigos, desde, hasta)
-    r1 = sesion.post(BASE_URL + "dgasat_param_1.jsp", data=base_data, timeout=40)
+    r1 = sesion.post(BASE_URL + "dgasat_param_1.jsp", data=base_data, timeout=TIMEOUT_CONFIG)
     if r1.status_code != 200:
         return []
 
-    # Extraer sensores disponibles para las estaciones consultadas
     disponibles = re.findall(r'name="parametros"\s+[^>]*value="([^"]+)"', r1.text)
     sensores = []
 
@@ -62,14 +84,12 @@ def consultar_lote_dgasat(sesion, codigos, desde, hasta):
     if not sensores:
         return []
 
-    # Solicitar tabla de datos
     data_tablas = list(base_data.items()) + [("parametros", v) for v, _, _ in sensores]
-    r2 = sesion.post(BASE_URL + "dgasat_param_tablas.jsp", data=data_tablas, timeout=120)
+    r2 = sesion.post(BASE_URL + "dgasat_param_tablas.jsp", data=data_tablas, timeout=TIMEOUT_CONFIG)
 
-    # Descargar HTML con mediciones
     rx = sesion.get(
         BASE_URL + "dgasat_param_tablas_instantaneos.jsp?pag=0",
-        timeout=120,
+        timeout=TIMEOUT_CONFIG,
         headers={"Referer": r2.url}
     )
 
@@ -106,21 +126,27 @@ def consultar_lote_dgasat(sesion, codigos, desde, hasta):
 
 
 def descargar_estaciones(codigos, dias=7):
+    """Descarga mediciones capturando fallas de red de manera segura."""
     hasta = datetime.now()
     desde = hasta - timedelta(days=dias)
-    sesion = nueva_sesion()
-    todos = []
 
-    # Máximo 3 estaciones por request (límite arquitectónico del portal DGA)
+    try:
+        sesion = nueva_sesion()
+    except requests.exceptions.Timeout:
+        raise TimeoutError("El servidor de la DGA (snia.mop.gob.cl) tardó demasiado en responder (Timeout).")
+    except requests.exceptions.RequestException as e:
+        raise ConnectionError(f"Error al conectar con la DGA: {e}")
+
+    todos = []
     for i in range(0, len(codigos), 3):
         lote = codigos[i:i + 3]
         try:
             regs = consultar_lote_dgasat(sesion, lote, desde, hasta)
             todos.extend(regs)
-        except requests.RequestException:
+        except requests.exceptions.RequestException:
             time.sleep(2)
-            sesion = nueva_sesion()
             try:
+                sesion = nueva_sesion()
                 regs = consultar_lote_dgasat(sesion, lote, desde, hasta)
                 todos.extend(regs)
             except Exception:
