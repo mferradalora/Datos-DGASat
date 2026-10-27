@@ -1,161 +1,147 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-import re
-import time
-from datetime import datetime, timedelta
+import os
+import streamlit as st
 import pandas as pd
-import requests
-from requests.adapters import HTTPAdapter
-from urllib3.util import Retry
-import urllib3
+from scraper import descargar_estaciones
 
-urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
-
-BASE_URL = "https://snia.mop.gob.cl/dgasat/pages/dgasat_param/"
-HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36",
-    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
-    "Accept-Language": "es-CL,es;q=0.9,en-US;q=0.8,en;q=0.7",
-    "Connection": "keep-alive",
-    "Sec-Fetch-Dest": "document",
-    "Sec-Fetch-Mode": "navigate",
-    "Sec-Fetch-Site": "none",
-    "Sec-Fetch-User": "?1",
-    "Upgrade-Insecure-Requests": "1"
-}
-DATE_REGEX = re.compile(r"\d{2}/\d{2}/\d{4}\s+\d{1,2}:\d{2}")
-DATE_FMT = "%d/%m/%Y"
-TIMEOUT_CONFIG = (15, 60)  # 15s para conectar, 60s para recibir respuesta
+st.set_page_config(
+    page_title="Monitor Hidrológico DGA SAT",
+    page_icon="💧",
+    layout="wide"
+)
 
 
-def nueva_sesion():
-    """Genera una sesión HTTP con reintentos automáticos y soporte para el servidor DGA."""
-    s = requests.Session()
-    s.verify = False
-    s.headers.update(HEADERS)
-
-    # Reintentos con retroceso exponencial ante inestabilidad del servidor
-    reintentos = Retry(
-        total=3,
-        backoff_factor=2,
-        status_forcelist=[500, 502, 503, 504],
-        raise_on_status=False
-    )
-    adapter = HTTPAdapter(max_retries=reintentos)
-    s.mount("https://", adapter)
-    s.mount("http://", adapter)
-
-    # Handshake inicial para adquirir la cookie JSESSIONID
-    s.get(BASE_URL + "dgasat_param.jsp?param=1", timeout=TIMEOUT_CONFIG)
-    return s
-
-
-def _payload_form(codigos, desde, hasta):
-    c = list(codigos) + ["-1"] * (3 - len(codigos))
-    return {
-        "estacion1": c[0], "estacion2": c[1], "estacion3": c[2],
-        "accion": "refresca", "param": "1", "tipo": "ANO",
-        "fechaFinGrafico": hasta.strftime(DATE_FMT), "hora_fin": "0",
-        "tiporep": "I", "period": "rango",
-        "fechaInicioTabla": desde.strftime(DATE_FMT),
-        "fechaFinTabla": hasta.strftime(DATE_FMT),
-        "UserID": "nobody", "EsDL1": "0", "EsDL2": "0", "EsDL3": "0"
-    }
-
-
-def consultar_lote_dgasat(sesion, codigos, desde, hasta):
-    base_data = _payload_form(codigos, desde, hasta)
-    r1 = sesion.post(BASE_URL + "dgasat_param_1.jsp", data=base_data, timeout=TIMEOUT_CONFIG)
-    if r1.status_code != 200:
-        return []
-
-    disponibles = re.findall(r'name="parametros"\s+[^>]*value="([^"]+)"', r1.text)
-    sensores = []
-
-    for valor in disponibles:
-        m = re.match(r"([\dKkx\-]+)_(\d+)_(.+)$", valor)
-        if not m:
-            continue
-        codigo, _, nombre_var = m.group(1), m.group(2), m.group(3).strip()
-
-        if codigo in codigos:
-            sensores.append((valor, codigo, nombre_var))
-
-    if not sensores:
-        return []
-
-    data_tablas = list(base_data.items()) + [("parametros", v) for v, _, _ in sensores]
-    r2 = sesion.post(BASE_URL + "dgasat_param_tablas.jsp", data=data_tablas, timeout=TIMEOUT_CONFIG)
-
-    rx = sesion.get(
-        BASE_URL + "dgasat_param_tablas_instantaneos.jsp?pag=0",
-        timeout=TIMEOUT_CONFIG,
-        headers={"Referer": r2.url}
-    )
-
-    if rx.status_code != 200 or "<table" not in rx.text.lower():
-        return []
-
-    mediciones = []
-    filas = re.findall(r"<tr[^>]*>(.*?)</tr>", rx.text, re.S | re.I)
-
-    for tr in filas:
-        celdas = [
-            re.sub(r"<[^>]+>", "", c).replace("&nbsp;", " ").strip()
-            for c in re.findall(r"<td[^>]*>(.*?)</td>", tr, re.S | re.I)
-        ]
-        for idx, celda in enumerate(celdas):
-            if DATE_REGEX.match(celda):
-                fecha_str = re.sub(r"\s+", " ", celda)
-                for k, (_, cod_bna, var_nombre) in enumerate(sensores):
-                    val_str = celdas[idx + 1 + k] if idx + 1 + k < len(celdas) else ""
-                    if val_str:
-                        try:
-                            valor_num = float(val_str.replace(",", "."))
-                            dt = datetime.strptime(fecha_str, "%d/%m/%Y %H:%M")
-                            mediciones.append({
-                                "codigo_bna": cod_bna,
-                                "variable": var_nombre,
-                                "fecha_hora": dt,
-                                "valor": valor_num
-                            })
-                        except ValueError:
-                            continue
-                break
-    return mediciones
-
-
-def descargar_estaciones(codigos, dias=7):
-    """Descarga mediciones capturando fallas de red de manera segura."""
-    hasta = datetime.now()
-    desde = hasta - timedelta(days=dias)
-
-    try:
-        sesion = nueva_sesion()
-    except requests.exceptions.Timeout:
-        raise TimeoutError("El servidor de la DGA (snia.mop.gob.cl) tardó demasiado en responder (Timeout).")
-    except requests.exceptions.RequestException as e:
-        raise ConnectionError(f"Error al conectar con la DGA: {e}")
-
-    todos = []
-    for i in range(0, len(codigos), 3):
-        lote = codigos[i:i + 3]
-        try:
-            regs = consultar_lote_dgasat(sesion, lote, desde, hasta)
-            todos.extend(regs)
-        except requests.exceptions.RequestException:
-            time.sleep(2)
-            try:
-                sesion = nueva_sesion()
-                regs = consultar_lote_dgasat(sesion, lote, desde, hasta)
-                todos.extend(regs)
-            except Exception:
-                pass
-        time.sleep(0.5)
-
-    if not todos:
+@st.cache_data
+def cargar_catalogo():
+    ruta = "data/catalogo_completo_dga.csv"
+    if not os.path.exists(ruta):
+        st.error(f"No se encontró el archivo {ruta}. Verifica que esté en la carpeta data/ de tu repositorio.")
         return pd.DataFrame()
 
-    df = pd.DataFrame(todos)
-    df = df.sort_values(by="fecha_hora").reset_index(drop=True)
+    df = pd.read_csv(ruta, dtype={"codigo_bna": str})
+    df.columns = [str(c).strip().lower() for c in df.columns]
+
+    cod = df["codigo_bna"].fillna("").astype(str)
+    nom = df["nombre"].fillna("").astype(str)
+    df["etiqueta"] = cod + " - " + nom
     return df
+
+
+df_cat = cargar_catalogo()
+
+st.title("💧 Monitor Hidrológico DGA SAT (Chile)")
+st.caption("Extracción en tiempo real de caudales, niveles freáticos y meteorología desde snia.mop.gob.cl")
+
+if df_cat.empty:
+    st.stop()
+
+# --- BARRA LATERAL ---
+with st.sidebar:
+    st.header("⚙️ Filtros de Consulta")
+
+    regiones_disponibles = sorted([r for r in df_cat["region"].dropna().unique() if str(r).strip() and str(r).lower() != "nan"])
+    region_sel = st.selectbox("1. Seleccione Región:", ["TODAS"] + regiones_disponibles)
+
+    df_filtrado = df_cat if region_sel == "TODAS" else df_cat[df_cat["region"] == region_sel]
+
+    todos_tipos = set()
+    for item in df_filtrado["tipo_estacion"].dropna():
+        partes = [p.strip() for p in str(item).split("-")]
+        todos_tipos.update(partes)
+
+    tipos_ordenados = sorted(list(todos_tipos))
+    tipo_sel = st.selectbox("2. Tipo de Estación:", ["TODOS"] + tipos_ordenados)
+
+    if tipo_sel != "TODOS":
+        df_filtrado = df_filtrado[df_filtrado["tipo_estacion"].str.contains(tipo_sel, case=False, na=False)]
+
+    st.write(f"**Estaciones disponibles:** {len(df_filtrado)}")
+
+    opciones_estaciones = df_filtrado["etiqueta"].tolist()
+    estaciones_sel = st.multiselect(
+        "3. Estaciones a consultar (Máx. 3):",
+        options=opciones_estaciones,
+        max_selections=3,
+        help="El portal DGA SAT admite hasta 3 puntos simultáneos por lote."
+    )
+
+    periodos = {
+        "Últimas 24 horas": 1,
+        "Últimos 7 días": 7,
+        "Últimos 30 días": 30,
+        "Últimos 90 días": 90
+    }
+    periodo_texto = st.radio("4. Período de datos:", list(periodos.keys()), index=1)
+    dias_consulta = periodos[periodo_texto]
+
+    btn_consultar = st.button("🚀 Consultar y Graficar", type="primary", use_container_width=True)
+
+# --- ÁREA PRINCIPAL ---
+if btn_consultar:
+    if not estaciones_sel:
+        st.warning("⚠️ Debes seleccionar al menos una estación antes de consultar.")
+    else:
+        codigos_consulta = [e.split(" - ")[0].strip() for e in estaciones_sel]
+
+        df_mediciones = pd.DataFrame()
+        with st.spinner(f"Descargando mediciones desde la DGA ({len(codigos_consulta)} estación(es), {dias_consulta} días)..."):
+            try:
+                df_mediciones = descargar_estaciones(codigos_consulta, dias=dias_consulta)
+            except TimeoutError as te:
+                st.error(f"⏱️ **Tiempo de espera agotado (Timeout):** El servidor ministerial de la DGA (`snia.mop.gob.cl`) tardó más de 60 segundos en responder.")
+                st.info("💡 **Causa común:** El firewall del MOP suele demorar o filtrar las peticiones originadas fuera de Chile (como los servidores en EE.UU. de Streamlit Cloud). Intenta presionar el botón nuevamente.")
+            except ConnectionError as ce:
+                st.error(f"🔌 **Falla de conexión:** No se pudo establecer enlace con la DGA. Detalle: {ce}")
+            except Exception as e:
+                st.error(f"⚠️ Ocurrió un error inesperado al procesar la solicitud: {e}")
+
+        if not df_mediciones.empty:
+            df_mediciones = df_mediciones.merge(
+                df_cat[["codigo_bna", "nombre"]],
+                on="codigo_bna",
+                how="left"
+            )
+            df_mediciones["serie"] = df_mediciones["codigo_bna"] + " (" + df_mediciones["variable"] + ")"
+
+            st.success(f"Se obtuvieron **{len(df_mediciones):,}** lecturas exitosamente.")
+
+            cols_metricas = st.columns(len(codigos_consulta))
+            for i, cod in enumerate(codigos_consulta):
+                df_sub = df_mediciones[df_mediciones["codigo_bna"] == cod]
+                with cols_metricas[i]:
+                    if not df_sub.empty:
+                        ult_reg = df_sub.iloc[-1]
+                        fecha_str = ult_reg["fecha_hora"].strftime("%d/%m %H:%M") if hasattr(ult_reg["fecha_hora"], "strftime") else str(ult_reg["fecha_hora"])
+                        st.metric(
+                            label=f"{ult_reg.get('nombre', cod)}",
+                            value=f"{ult_reg['valor']} {ult_reg['variable']}",
+                            delta=f"Última: {fecha_str}"
+                        )
+
+            st.subheader("📈 Series de Tiempo")
+            df_pivot = df_mediciones.pivot_table(
+                index="fecha_hora",
+                columns="serie",
+                values="valor"
+            )
+            st.line_chart(df_pivot, use_container_width=True)
+
+            with st.expander("📄 Ver y descargar tabla de datos detallada"):
+                st.dataframe(df_mediciones[["codigo_bna", "nombre", "variable", "fecha_hora", "valor"]], use_container_width=True)
+                csv_bytes = df_mediciones.to_csv(index=False, encoding="utf-8-sig").encode("utf-8-sig")
+                st.download_button(
+                    label="📥 Descargar datos consolidados (CSV)",
+                    data=csv_bytes,
+                    file_name=f"dga_mediciones_{periodo_texto.replace(' ', '_').lower()}.csv",
+                    mime="text/csv"
+                )
+        elif 'te' not in locals() and 'ce' not in locals():
+            st.warning("No se encontraron registros de transmisión recientes para las estaciones seleccionadas en este intervalo.")
+
+# Mapa geográfico
+if not df_filtrado.empty and "latitud" in df_filtrado.columns and "longitud" in df_filtrado.columns:
+    df_mapa = df_filtrado.dropna(subset=["latitud", "longitud"]).copy()
+    if not df_mapa.empty:
+        with st.expander(f"🗺️ Ver ubicación de estaciones disponibles ({len(df_mapa)} en mapa)", expanded=False):
+            st.map(df_mapa, latitude="latitud", longitude="longitud", size=20)
