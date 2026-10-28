@@ -1,8 +1,9 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 """
-Generador de Mapa Interactivo Nacional DGA SAT con Folium y GeoPandas.
-Salida: index.html (Optimizado para despliegue directo en GitHub Pages).
+Generador de Mapa Interactivo Nacional DGA SAT.
+Filtro exclusivo por Región y polígonos no interactivos (sin sombreado hover).
+Salida: index.html (Optimizado para GitHub Pages).
 """
 
 import json
@@ -11,34 +12,31 @@ import unicodedata
 from pathlib import Path
 from branca.element import Element
 import geopandas as gpd
-import numpy as np
 import pandas as pd
 import folium
 
-# Rutas de entrada relativas al repositorio
 carpeta_data = Path("data")
 path_csv = carpeta_data / "catalogo_completo_dga.csv"
 path_regiones = carpeta_data / "Regiones_Chile.geojson"
-path_provincias = carpeta_data / "Provincias_Chile.geojson"
 
-# 1. Diccionario de Regiones y Provincias Oficiales
-regiones_provincias = {
-    "Arica y Parinacota": ["Arica", "Parinacota"],
-    "Tarapaca": ["Iquique", "Tamarugal"],
-    "Antofagasta": ["Tocopilla", "El Loa", "Antofagasta"],
-    "Atacama": ["Chañaral", "Copiapó", "Huasco"],
-    "Coquimbo": ["Elqui", "Limarí", "Choapa"],
-    "Valparaiso": ["Petorca", "Los Andes", "San Felipe", "Quillota", "Valparaíso", "San Antonio", "Isla de Pascua", "Marga Marga"],
-    "Metropolitana": ["Chacabuco", "Santiago", "Cordillera", "Maipo", "Melipilla", "Talagante"],
-    "O'Higgins": ["Cachapoal", "Colchagua", "Cardenal Caro"],
-    "Maule": ["Curicó", "Talca", "Linares", "Cauquenes"],
-    "Nuble": ["Diguillín", "Itata", "Punilla"],
-    "Bio Bio": ["Bio-Bio", "Concepción", "Arauco"],
-    "Araucania": ["Malleco", "Cautín"],
-    "Los Rios": ["Valdivia", "Ranco"],
-    "Los Lagos": ["Osorno", "Llanquihue", "Chiloé", "Palena"],
-    "Aysen": ["Coyhaique", "Aysén", "General Carrera", "Capitán Prat"],
-    "Magallanes": ["Última Esperanza", "Magallanes", "Tierra del Fuego", "Antártica Chilena"]
+# Lista de Regiones de Norte a Sur y sus palabras clave para mapeo
+REGIONES_CHILE = {
+    "Arica y Parinacota": ["arica", "parinacota"],
+    "Tarapacá": ["tarapaca"],
+    "Antofagasta": ["antofagasta"],
+    "Atacama": ["atacama"],
+    "Coquimbo": ["coquimbo"],
+    "Valparaíso": ["valparaiso"],
+    "Metropolitana": ["metropolitana", "santiago"],
+    "O'Higgins": ["higgins"],
+    "Maule": ["maule"],
+    "Ñuble": ["nuble"],
+    "Biobío": ["biobio", "bio bio"],
+    "La Araucanía": ["araucania"],
+    "Los Ríos": ["los rios", "valdivia"],
+    "Los Lagos": ["los lagos", "llanquihue"],
+    "Aysén": ["aysen", "aisen"],
+    "Magallanes": ["magallanes"]
 }
 
 
@@ -51,75 +49,50 @@ def normalizar_texto(texto):
     return ' '.join(s.split())
 
 
-def filtrar_layer_local(gdf, nombre_busqueda):
+def filtrar_poligono_region(gdf, palabras_clave):
     if gdf.empty:
         return gdf.iloc[0:0]
-    if gdf.crs is None:
-        gdf = gdf.set_crs(epsg=4326)
-    elif gdf.crs.to_epsg() != 4326:
-        gdf = gdf.to_crs(epsg=4326)
-
-    target_norm = normalizar_texto(nombre_busqueda)
     for col in gdf.columns:
         if col != gdf.geometry.name:
             col_norm = gdf[col].astype(str).apply(normalizar_texto)
-            matches = gdf[col_norm.str.contains(target_norm, na=False, regex=False)]
-            if not matches.empty:
-                return matches
+            for palabra in palabras_clave:
+                p_norm = normalizar_texto(palabra)
+                coincidencias = gdf[col_norm.str.contains(p_norm, na=False, regex=False)]
+                if not coincidencias.empty:
+                    return coincidencias
     return gdf.iloc[0:0]
 
 
-print("🔄 1. Cargando catálogos y capas geográficas...")
+print("🔄 1. Cargando catálogos y límites regionales...")
 df_csv = pd.read_csv(path_csv, dtype={"codigo_bna": str})
 df_csv.columns = [str(c).strip().lower() for c in df_csv.columns]
 
-# Limpiar coordenadas válidas
+# Limpieza de coordenadas geográficas
 df_csv["latitud"] = pd.to_numeric(df_csv["latitud"], errors="coerce")
 df_csv["longitud"] = pd.to_numeric(df_csv["longitud"], errors="coerce")
 df_csv = df_csv.dropna(subset=["latitud", "longitud"]).copy()
 df_csv = df_csv[(df_csv["latitud"] != 0) & (df_csv["longitud"] != 0)]
+df_csv["region_norm"] = df_csv["region"].astype(str).apply(normalizar_texto)
 
 gdf_regiones_raw = gpd.read_file(path_regiones)
-gdf_provincias_raw = gpd.read_file(path_provincias)
-
-if gdf_regiones_raw.crs != "EPSG:4326":
+if gdf_regiones_raw.crs is None:
+    gdf_regiones_raw = gdf_regiones_raw.set_crs(epsg=4326)
+elif gdf_regiones_raw.crs.to_epsg() != 4326:
     gdf_regiones_raw = gdf_regiones_raw.to_crs(epsg=4326)
-if gdf_provincias_raw.crs != "EPSG:4326":
-    gdf_provincias_raw = gdf_provincias_raw.to_crs(epsg=4326)
-
-# Convertir estaciones a GeoDataFrame puntual WGS84
-gdf_estaciones_nac = gpd.GeoDataFrame(
-    df_csv,
-    geometry=gpd.points_from_xy(df_csv["longitud"], df_csv["latitud"]),
-    crs="EPSG:4326"
-)
-
-# Cruce espacial para determinar la Provincia oficial de cada estación
-col_prov_nombre = next((c for c in gdf_provincias_raw.columns if "nom" in c.lower() or "prov" in c.lower()), gdf_provincias_raw.columns[0])
-gdf_estaciones_nac = gpd.sjoin(
-    gdf_estaciones_nac,
-    gdf_provincias_raw[[col_prov_nombre, "geometry"]].rename(columns={col_prov_nombre: "provincia_gis"}),
-    how="left",
-    predicate="within"
-)
-gdf_estaciones_nac["provincia_gis"] = gdf_estaciones_nac["provincia_gis"].fillna("Sin Provincia")
-gdf_estaciones_nac["region_norm"] = gdf_estaciones_nac["region"].astype(str).apply(normalizar_texto)
-gdf_estaciones_nac["provincia_norm"] = gdf_estaciones_nac["provincia_gis"].astype(str).apply(normalizar_texto)
 
 
-# 2. Función de estilo por Tipo de Estación
 def obtener_color_tipo(tipo_str):
     t = str(tipo_str).lower()
     if "fluvio" in t:
-        return {"color": "#0284c7", "fillColor": "#38bdf8", "tipo_grupo": "Fluviométrica (Caudal)"}
+        return {"color": "#0284c7", "fillColor": "#38bdf8", "etiqueta": "Fluviométrica (Caudal)"}
     elif "pozo" in t:
-        return {"color": "#d97706", "fillColor": "#fbbf24", "tipo_grupo": "Nivel de Pozo (Subterráneo)"}
+        return {"color": "#d97706", "fillColor": "#fbbf24", "etiqueta": "Control Nivel Pozo"}
     elif "glaciar" in t:
-        return {"color": "#0891b2", "fillColor": "#67e8f9", "tipo_grupo": "Glaciares y Nieve"}
+        return {"color": "#0891b2", "fillColor": "#67e8f9", "etiqueta": "Glaciares y Nieve"}
     elif "lago" in t or "embalse" in t:
-        return {"color": "#7c3aed", "fillColor": "#c084fc", "tipo_grupo": "Lagos y Embalses"}
+        return {"color": "#7c3aed", "fillColor": "#c084fc", "etiqueta": "Lagos y Embalses"}
     else:
-        return {"color": "#059669", "fillColor": "#34d399", "tipo_grupo": "Meteorológica"}
+        return {"color": "#059669", "fillColor": "#34d399", "etiqueta": "Meteorológica"}
 
 
 print("🗺️ 2. Inicializando mapa base...")
@@ -129,222 +102,120 @@ folium.TileLayer(tiles="https://mt1.google.com/vt/lyrs=y&x={x}&y={y}&z={z}", att
 folium.TileLayer(tiles="CartoDB positron", name="CartoDB Claro", overlay=False, control=True, show=False).add_to(mapa_web)
 
 region_dict_js = {}
-prov_dict_js = {}
 options_html = ""
 
-print("🛠️ 3. Construyendo capas regionales y marcadores...")
+print("🛠️ 3. Agrupando estaciones y límites por Región...")
 
-for region_nom, provincias in regiones_provincias.items():
+for region_nom, claves in REGIONES_CHILE.items():
     reg_key = normalizar_texto(region_nom).replace(' ', '_')
-    capa_reg = filtrar_layer_local(gdf_regiones_raw, region_nom)
+    capa_reg = filtrar_poligono_region(gdf_regiones_raw, claves)
 
-    target_norm_reg = normalizar_texto(region_nom)
-    gdf_reg = gdf_estaciones_nac[gdf_estaciones_nac["region_norm"].str.contains(target_norm_reg, na=False)].copy()
+    # Filtrar estaciones del CSV que pertenezcan a esta región
+    patron_claves = "|".join([normalizar_texto(k) for k in claves])
+    df_reg = df_csv[df_csv["region_norm"].str.contains(patron_claves, na=False, regex=True)].copy()
 
-    if capa_reg.empty and gdf_reg.empty:
+    if capa_reg.empty and df_reg.empty:
         continue
 
+    # Calcular encuadre geográfico (bounds)
     if not capa_reg.empty:
         xmin, ymin, xmax, ymax = capa_reg.total_bounds
         bounds_reg = [[ymin, xmin], [ymax, xmax]]
     else:
-        bounds_reg = [[gdf_reg["latitud"].min(), gdf_reg["longitud"].min()],
-                      [gdf_reg["latitud"].max(), gdf_reg["longitud"].max()]]
+        bounds_reg = [[df_reg["latitud"].min(), df_reg["longitud"].min()],
+                      [df_reg["latitud"].max(), df_reg["longitud"].max()]]
+
+    # FeatureGroup único para la región (contiene polígono y marcadores)
+    fg_region = folium.FeatureGroup(name=f"Región {region_nom}", overlay=True, show=True, control=False)
+
+    # 1. Polígono del límite regional
+    # interactive=False desactiva el sombreado hover y eventos del mouse al pasar por encima
+    if not capa_reg.empty:
+        folium.GeoJson(
+            capa_reg,
+            name=f"Límite {region_nom}",
+            interactive=False,
+            style_function=lambda x: {
+                "color": "#1e293b",
+                "fillOpacity": 0,
+                "weight": 2.0,
+                "interactive": False
+            }
+        ).add_to(fg_region)
+
+    # 2. Marcadores de estaciones de la región
+    for _, row in df_reg.iterrows():
+        estilo = obtener_color_tipo(row.get("tipo_estacion", ""))
+        popup_html = f"""
+        <div style="font-family: Arial, sans-serif; font-size: 12px; min-width: 210px;">
+            <b style="color: {estilo['color']}; font-size: 13px;">{row.get('nombre', '')}</b><br>
+            <b>Código BNA:</b> {row.get('codigo_bna', '')}<br>
+            <b>Tipo:</b> {row.get('tipo_estacion', '')}<br>
+            <b>Región:</b> {row.get('region', '')}<br>
+            <b>Transmisión:</b> {row.get('fuente', '')}<br>
+            <b>Altitud:</b> {row.get('altitud', '')} msnm<br>
+            <b>Coordenadas:</b> {row.get('latitud', ''):.4f}, {row.get('longitud', ''):.4f}
+        </div>
+        """
+        folium.CircleMarker(
+            location=[row["latitud"], row["longitud"]],
+            radius=5.5,
+            color=estilo["color"],
+            fill=True,
+            fill_color=estilo["fillColor"],
+            fill_opacity=0.85,
+            weight=1.5,
+            tooltip=f"<b>{row.get('codigo_bna', '')}</b> - {row.get('nombre', '')}",
+            popup=folium.Popup(popup_html, max_width=320)
+        ).add_to(fg_region)
+
+    fg_region.add_to(mapa_web)
 
     region_dict_js[reg_key] = {
         "name": region_nom,
+        "var": fg_region.get_name(),
         "bounds": bounds_reg,
-        "provinces": [],
-        "border_var": f"fg_border_{reg_key}"
+        "total_estaciones": len(df_reg)
     }
-    options_html += f'<option value="{reg_key}">{region_nom}</option>\n'
+    options_html += f'<option value="{reg_key}">{region_nom} ({len(df_reg)})</option>\n'
 
-    # Límite regional
-    fg_border = folium.FeatureGroup(name=f"Límite {region_nom}", overlay=True, show=True, control=False)
-    if not capa_reg.empty:
-        capa_reg.explore(m=fg_border, color="#0f172a", style_kwds={"fillOpacity": 0, "weight": 2.2}, tooltip=False, popup=False)
-    fg_border.add_to(mapa_web)
-
-    obras_asignadas_idx = set()
-
-    for prov_nom in provincias:
-        prov_key = normalizar_texto(prov_nom).replace(' ', '_') + "_" + reg_key
-        capa_prov = filtrar_layer_local(gdf_provincias_raw, prov_nom)
-
-        target_norm_prov = normalizar_texto(prov_nom)
-        gdf_prov = gdf_reg[gdf_reg["provincia_norm"].str.contains(target_norm_prov, na=False)].copy()
-        obras_asignadas_idx.update(gdf_prov.index)
-
-        fg_prov = folium.FeatureGroup(name=f"Prov. {prov_nom}", overlay=True, show=True, control=False)
-
-        if not capa_prov.empty:
-            capa_prov.explore(m=fg_prov, color="#64748b", style_kwds={"fillOpacity": 0.03, "weight": 1.2, "dashArray": "4, 4"}, tooltip=False, popup=False)
-            pxmin, pymin, pxmax, pymax = capa_prov.total_bounds
-            p_bounds = [[pymin, pxmin], [pymax, pxmax]]
-        else:
-            p_bounds = bounds_reg
-
-        # Inserción de marcadores
-        for _, row in gdf_prov.iterrows():
-            estilo = obtener_color_tipo(row.get("tipo_estacion", ""))
-            popup_html = f"""
-            <div style="font-family: Arial, sans-serif; font-size: 12px; min-width: 200px;">
-                <b style="color: {estilo['color']}; font-size: 13px;">{row.get('nombre', '')}</b><br>
-                <b>Código BNA:</b> {row.get('codigo_bna', '')}<br>
-                <b>Tipo:</b> {row.get('tipo_estacion', '')}<br>
-                <b>Provincia:</b> {row.get('provincia_gis', '')}<br>
-                <b>Región:</b> {row.get('region', '')}<br>
-                <b>Transmisión:</b> {row.get('fuente', '')}<br>
-                <b>Altitud:</b> {row.get('altitud', '')} msnm<br>
-                <b>Coordenadas:</b> {row.get('latitud', ''):.4f}, {row.get('longitud', ''):.4f}
-            </div>
-            """
-            folium.CircleMarker(
-                location=[row["latitud"], row["longitud"]],
-                radius=5.5,
-                color=estilo["color"],
-                fill=True,
-                fill_color=estilo["fillColor"],
-                fill_opacity=0.85,
-                weight=1.5,
-                tooltip=f"<b>{row.get('codigo_bna', '')}</b> - {row.get('nombre', '')}",
-                popup=folium.Popup(popup_html, max_width=300)
-            ).add_to(fg_prov)
-
-        fg_prov.add_to(mapa_web)
-        prov_dict_js[prov_key] = {
-            "name": prov_nom,
-            "var": fg_prov.get_name(),
-            "bounds": p_bounds
-        }
-        region_dict_js[reg_key]["provinces"].append(prov_key)
-
-    # Estaciones sin provincia asignada
-    gdf_huerfanas = gdf_reg[~gdf_reg.index.isin(obras_asignadas_idx)]
-    if not gdf_huerfanas.empty:
-        h_key = "resto_" + reg_key
-        fg_huerfana = folium.FeatureGroup(name="Otras Estaciones", overlay=True, show=True, control=False)
-        for _, row in gdf_huerfanas.iterrows():
-            estilo = obtener_color_tipo(row.get("tipo_estacion", ""))
-            popup_html = f"""
-            <div style="font-family: Arial, sans-serif; font-size: 12px; min-width: 200px;">
-                <b style="color: {estilo['color']}; font-size: 13px;">{row.get('nombre', '')}</b><br>
-                <b>Código BNA:</b> {row.get('codigo_bna', '')}<br>
-                <b>Tipo:</b> {row.get('tipo_estacion', '')}<br>
-                <b>Región:</b> {row.get('region', '')}<br>
-                <b>Transmisión:</b> {row.get('fuente', '')}<br>
-                <b>Altitud:</b> {row.get('altitud', '')} msnm
-            </div>
-            """
-            folium.CircleMarker(
-                location=[row["latitud"], row["longitud"]],
-                radius=5.5,
-                color=estilo["color"],
-                fill=True,
-                fill_color=estilo["fillColor"],
-                fill_opacity=0.85,
-                weight=1.5,
-                tooltip=f"<b>{row.get('codigo_bna', '')}</b> - {row.get('nombre', '')}",
-                popup=folium.Popup(popup_html, max_width=300)
-            ).add_to(fg_huerfana)
-        fg_huerfana.add_to(mapa_web)
-        prov_dict_js[h_key] = {"name": "Otras Estaciones", "var": fg_huerfana.get_name(), "bounds": bounds_reg}
-        region_dict_js[reg_key]["provinces"].append(h_key)
-
-
-# 4. Inyección del Panel de Navegación (JavaScript Nativo)
+# 4. Inyección del selector exclusivo por Región
 menu_control_html = f"""
-<div style="position: fixed; top: 14px; left: 60px; z-index: 1000; background: white; padding: 12px 16px; border-radius: 8px; box-shadow: 0 2px 12px rgba(0,0,0,0.25); font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; min-width: 250px;">
-    <div style="font-weight: bold; font-size: 14px; color: #0284c7; margin-bottom: 8px;">💧 Red DGA SAT Chile</div>
-    <label for="regionSelect" style="font-weight: 600; font-size: 12px; color: #334155;">Región:</label><br>
-    <select id="regionSelect" onchange="cambiarRegion(this.value)" style="margin-top: 4px; margin-bottom: 10px; padding: 6px; font-size: 12px; border-radius: 4px; border: 1px solid #cbd5e1; width: 100%; cursor: pointer;">
+<div style="position: fixed; top: 14px; left: 60px; z-index: 1000; background: white; padding: 12px 16px; border-radius: 8px; box-shadow: 0 2px 12px rgba(0,0,0,0.25); font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; min-width: 250px;">
+    <div style="font-weight: bold; font-size: 14px; color: #0284c7; margin-bottom: 8px;">💧 Red DGASat Chile</div>
+    <label for="regionSelect" style="font-weight: 600; font-size: 12px; color: #334155;">Seleccionar Región:</label><br>
+    <select id="regionSelect" onchange="cambiarRegion(this.value)" style="margin-top: 6px; padding: 6px 10px; font-size: 12px; border-radius: 4px; border: 1px solid #cbd5e1; width: 100%; cursor: pointer;">
         <option value="">-- Todo el País --</option>
         {options_html}
-    </select>
-    
-    <label for="provinciaSelect" style="font-weight: 600; font-size: 12px; color: #334155;">Provincia:</label><br>
-    <select id="provinciaSelect" onchange="cambiarProvincia(this.value)" style="margin-top: 4px; padding: 6px; font-size: 12px; border-radius: 4px; border: 1px solid #cbd5e1; width: 100%; cursor: pointer; background-color: #f8fafc;" disabled>
-        <option value="">-- Todas las Provincias --</option>
     </select>
 </div>
 
 <script>
 var regionDict = {json.dumps(region_dict_js)};
-var provDict = {json.dumps(prov_dict_js)};
-
-function mostrarTodo() {{
-    var map = {mapa_web.get_name()};
-    for (var r in regionDict) {{
-        var fgBorder = window[regionDict[r].border_var];
-        if (fgBorder && !map.hasLayer(fgBorder)) map.addLayer(fgBorder);
-        regionDict[r].provinces.forEach(function(pKey) {{
-            var fgProv = window[provDict[pKey].var];
-            if (fgProv && !map.hasLayer(fgProv)) map.addLayer(fgProv);
-        }});
-    }}
-}}
-
-function ocultarTodo() {{
-    var map = {mapa_web.get_name()};
-    for (var r in regionDict) {{
-        var fgBorder = window[regionDict[r].border_var];
-        if (fgBorder && map.hasLayer(fgBorder)) map.removeLayer(fgBorder);
-        regionDict[r].provinces.forEach(function(pKey) {{
-            var fgProv = window[provDict[pKey].var];
-            if (fgProv && map.hasLayer(fgProv)) map.removeLayer(fgProv);
-        }});
-    }}
-}}
 
 function cambiarRegion(regKey) {{
     var map = {mapa_web.get_name()};
-    var provSelect = document.getElementById("provinciaSelect");
-    provSelect.innerHTML = '<option value="">-- Todas las Provincias --</option>';
-    ocultarTodo();
 
     if (regKey === "") {{
-        provSelect.disabled = true;
-        provSelect.style.backgroundColor = "#f8fafc";
-        mostrarTodo();
+        for (var r in regionDict) {{
+            var fg = window[regionDict[r].var];
+            if (fg && !map.hasLayer(fg)) {{
+                map.addLayer(fg);
+            }}
+        }}
         map.setView([-35.6751, -71.5430], 4);
     }} else {{
-        provSelect.disabled = false;
-        provSelect.style.backgroundColor = "#ffffff";
-        var fgBorder = window[regionDict[regKey].border_var];
-        if (fgBorder && !map.hasLayer(fgBorder)) map.addLayer(fgBorder);
-
-        regionDict[regKey].provinces.forEach(function(pKey) {{
-            var pData = provDict[pKey];
-            var fgProv = window[pData.var];
-            if (fgProv && !map.hasLayer(fgProv)) map.addLayer(fgProv);
-            var opt = document.createElement("option");
-            opt.value = pKey;
-            opt.text = pData.name;
-            provSelect.add(opt);
-        }});
+        for (var r in regionDict) {{
+            var fg = window[regionDict[r].var];
+            if (fg) {{
+                if (r === regKey) {{
+                    if (!map.hasLayer(fg)) map.addLayer(fg);
+                }} else {{
+                    if (map.hasLayer(fg)) map.removeLayer(fg);
+                }}
+            }}
+        }}
         map.fitBounds(regionDict[regKey].bounds);
-    }}
-}}
-
-function cambiarProvincia(provKey) {{
-    var map = {mapa_web.get_name()};
-    var regKey = document.getElementById("regionSelect").value;
-    if (!regKey) return;
-    ocultarTodo();
-
-    var fgBorder = window[regionDict[regKey].border_var];
-    if (fgBorder && !map.hasLayer(fgBorder)) map.addLayer(fgBorder);
-
-    if (provKey === "") {{
-        regionDict[regKey].provinces.forEach(function(pKey) {{
-            var fgProv = window[provDict[pKey].var];
-            if (fgProv && !map.hasLayer(fgProv)) map.addLayer(fgProv);
-        }});
-        map.fitBounds(regionDict[regKey].bounds);
-    }} else {{
-        var fgProv = window[provDict[provKey].var];
-        if (fgProv && !map.hasLayer(fgProv)) map.addLayer(fgProv);
-        map.fitBounds(provDict[provKey].bounds);
     }}
 }}
 </script>
@@ -385,4 +256,4 @@ folium.LayerControl(collapsed=True).add_to(mapa_web)
 
 archivo_salida = "index.html"
 mapa_web.save(archivo_salida)
-print(f"\n🚀 ¡Mapa interactivo generado exitosamente como '{archivo_salida}'!")
+print(f"\n🚀 ¡Éxito! Mapa generado en '{archivo_salida}'.")
