@@ -1,0 +1,118 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Series Históricas DGA</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #f8fafc; margin: 0; padding: 20px; color: #1e293b; }
+        .card { max-width: 1100px; margin: 0 auto; background: #ffffff; padding: 24px; border-radius: 10px; box-shadow: 0 4px 12px rgba(0,0,0,0.05); }
+        .header { display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #e2e8f0; padding-bottom: 16px; margin-bottom: 20px; }
+        h1 { margin: 0; font-size: 20px; color: #0284c7; }
+        .btn { background: #0284c7; color: white; padding: 8px 16px; border-radius: 6px; text-decoration: none; font-size: 13px; font-weight: 600; border: none; cursor: pointer; display: inline-flex; align-items: center; gap: 6px; }
+        .btn:hover { background: #0369a1; }
+        #estado { font-size: 13px; color: #64748b; margin-bottom: 12px; }
+        .chart-box { position: relative; width: 100%; height: 480px; }
+    </style>
+</head>
+<body>
+
+<div class="card">
+    <div class="header">
+        <div>
+            <h1 id="titulo">Estación: {{CODIGO}}</h1>
+            <div id="estado">Cargando mediciones desde SQLite / DGA...</div>
+        </div>
+        <a id="btnCsv" href="#" class="btn">📥 Descargar CSV</a>
+    </div>
+
+    <div class="chart-box">
+        <canvas id="graficoCanvas"></canvas>
+    </div>
+</div>
+
+<script>
+    const urlParams = new URLSearchParams(window.location.search);
+    const codigo = urlParams.get('codigo') || "{{CODIGO}}";
+    const dias = urlParams.get('dias') || "{{DIAS}}";
+
+    document.getElementById("titulo").innerText = `Estación BNA: ${codigo} (Últimos ${dias} días)`;
+    document.getElementById("btnCsv").href = `/api/descargar_csv?codigo=${encodeURIComponent(codigo)}&dias=${dias}`;
+
+    async function cargarDatos() {
+        const estado = document.getElementById("estado");
+        try {
+            const res = await fetch(`/api/datos?codigo=${encodeURIComponent(codigo)}&dias=${dias}`);
+            if (!res.ok) throw new Error("No se encontraron registros para esta estación.");
+            const datos = await res.json();
+
+            estado.innerText = `Mostrando ${datos.length.toLocaleString()} lecturas recuperadas del servidor.`;
+            dibujarGrafico(datos);
+        } catch (err) {
+            estado.innerText = `⚠️ ${err.message}`;
+        }
+    }
+
+    function dibujarGrafico(datos) {
+        // Agrupar por variable hidrológica
+        const series = {};
+        const fechasSet = new Set();
+
+        datos.forEach(d => {
+            const fechaCorta = d.fecha_str.split(" ")[0]; // Formato DD-MM-YYYY
+            fechasSet.add(fechaCorta);
+            if (!series[d.variable]) series[d.variable] = {};
+            series[d.variable][fechaCorta] = d.valor;
+        });
+
+        const labels = Array.from(fechasSet);
+        const colores = ["#0284c7", "#ef4444", "#10b981", "#f59e0b", "#8b5cf6"];
+        let colorIdx = 0;
+
+        const datasets = Object.keys(series).map(varNom => {
+            const dataPuntos = labels.map(f => series[varNom][f] !== undefined ? series[varNom][f] : null);
+            const color = colores[colorIdx % colores.length];
+            colorIdx++;
+            return {
+                label: varNom,
+                data: dataPuntos,
+                borderColor: color,
+                backgroundColor: color,
+                borderWidth: 1.8,
+                pointRadius: 0,
+                pointHoverRadius: 4,
+                spanGaps: true
+            };
+        });
+
+        const ctx = document.getElementById('graficoCanvas').getContext('2d');
+        new Chart(ctx, {
+            type: 'line',
+            data: { labels, datasets },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                interaction: { mode: 'index', intersect: false },
+                scales: {
+                    x: {
+                        ticks: {
+                            maxTicksLimit: 12,
+                            callback: function(val, index) {
+                                return labels[index]; // Forzar DD-MM-YYYY
+                            }
+                        },
+                        grid: { display: false }
+                    },
+                    y: {
+                        grid: { color: "#f1f5f9" }
+                    }
+                }
+            }
+        });
+    }
+
+    window.onload = cargarDatos;
+</script>
+</body>
+</html>
