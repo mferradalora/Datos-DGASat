@@ -146,6 +146,7 @@ for region_nom, claves in REGIONES_CHILE.items():
     # 2. Marcadores de estaciones de la región
     for _, row in df_reg.iterrows():
         estilo = obtener_color_tipo(row.get("tipo_estacion", ""))
+        
         popup_html = f"""
         <div style="font-family: Arial, sans-serif; font-size: 12px; min-width: 210px;">
             <b style="color: {estilo['color']}; font-size: 13px;">{row.get('nombre', '')}</b><br>
@@ -155,6 +156,14 @@ for region_nom, claves in REGIONES_CHILE.items():
             <b>Transmisión:</b> {row.get('fuente', '')}<br>
             <b>Altitud:</b> {row.get('altitud', '')} msnm<br>
             <b>Coordenadas:</b> {row.get('latitud', ''):.4f}, {row.get('longitud', ''):.4f}
+            
+            <div style="margin-top: 10px; padding-top: 8px; border-top: 1px solid #e2e8f0; text-align: center;">
+                <a href="https://datos-dgasat.streamlit.app/?codigo={row.get('codigo_bna', '')}&dias=90" 
+                   target="_blank" 
+                   style="display: block; background-color: #0284c7; color: white; padding: 7px 10px; font-size: 11px; font-weight: bold; text-decoration: none; border-radius: 4px; box-shadow: 0 1px 2px rgba(0,0,0,0.15);">
+                    📥 Descargar datos (Últimos 3 meses)
+                </a>
+            </div>
         </div>
         """
         folium.CircleMarker(
