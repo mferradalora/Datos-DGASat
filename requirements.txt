@@ -1,4 +1,6 @@
-streamlit>=1.35.0
+fastapi
+uvicorn
 requests>=2.31.0
 pandas>=2.0.0
 urllib3>=2.0.0
+streamlit>=1.35.0
