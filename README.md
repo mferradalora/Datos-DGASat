@@ -32,6 +32,7 @@ El sistema opera bajo una arquitectura desacoplada y eficiente diseñada para ev
      ├── Gráfico interactivo Chart.js (Eje temporal en formato DD-MM-YYYY).
      ├── Encabezado con Código BNA y Nombre oficial de la estación.
      └── Exportación directa a CSV: [codigo_bna, nombre, variable, fecha_hora, valor].
+```
 
 ---
 
