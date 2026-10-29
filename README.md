@@ -1,4 +1,4 @@
-# 💧 Datos-DGASat: Monitor e Inventario de Estaciones DGA Chile
+# 💧 Datos-DGASatel
 
 Plataforma integral de cartografía interactiva, almacenamiento en base de datos local, visualización y descarga de series de tiempo de los datos de la red de estaciones DGASatel de la **Dirección General de Aguas (DGA)** del Ministerio de Obras Públicas de Chile.
 La información presentada es extraída directamente de los servicios **Hidrolínea (Mapa en línea) [https://www.mop.gob.cl/serviciosmop/hidrolinea-mapa-en-linea/](https://www.mop.gob.cl/serviciosmop/hidrolinea-mapa-en-linea/ )** y **DGASatel [https://www.mop.gob.cl/serviciosmop/dgasatel/](https://www.mop.gob.cl/serviciosmop/dgasatel/)** de la DGA.
