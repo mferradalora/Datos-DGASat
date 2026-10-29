@@ -21,10 +21,12 @@
 <div class="card">
     <div class="header">
         <div>
-            <h1 id="titulo">Estación: {{CODIGO}}</h1>
+            <!-- Modificación 1: Plantilla con {{NOMBRE}} junto al código BNA -->
+            <h1 id="titulo">Estación BNA: {{CODIGO}} - {{NOMBRE}} (Últimos {{DIAS}} días)</h1>
             <div id="estado">Cargando mediciones desde SQLite / DGA...</div>
         </div>
-        <a id="btnCsv" href="#" class="btn">📥 Descargar CSV</a>
+        <!-- Modificación 2: Evento para descargar con columna 'nombre' -->
+        <a id="btnCsv" href="#" class="btn" onclick="descargarCsv(); return false;">📥 Descargar CSV</a>
     </div>
 
     <div class="chart-box">
@@ -35,27 +37,60 @@
 <script>
     const urlParams = new URLSearchParams(window.location.search);
     const codigo = urlParams.get('codigo') || "{{CODIGO}}";
+    let nombreEstacion = urlParams.get('nombre') || "{{NOMBRE}}";
     const dias = urlParams.get('dias') || "{{DIAS}}";
+    let datosCargados = [];
 
-    document.getElementById("titulo").innerText = `Estación BNA: ${codigo} (Últimos ${dias} días)`;
-    document.getElementById("btnCsv").href = `/api/descargar_csv?codigo=${encodeURIComponent(codigo)}&dias=${dias}`;
+    // Modificación 3: Actualizar título dinámicamente con el nombre
+    function actualizarTitulo() {
+        const textoNombre = (nombreEstacion && nombreEstacion !== "{{NOMBRE}}") ? ` - ${nombreEstacion}` : "";
+        document.getElementById("titulo").innerText = `Estación BNA: ${codigo}${textoNombre} (Últimos ${dias} días)`;
+    }
+    actualizarTitulo();
 
     async function cargarDatos() {
         const estado = document.getElementById("estado");
         try {
             const res = await fetch(`/api/datos?codigo=${encodeURIComponent(codigo)}&dias=${dias}`);
             if (!res.ok) throw new Error("No se encontraron registros para esta estación.");
-            const datos = await res.json();
+            datosCargados = await res.json();
 
-            estado.innerText = `Mostrando ${datos.length.toLocaleString()} lecturas recuperadas del servidor.`;
-            dibujarGrafico(datos);
+            // Modificación 4: Si los datos traen el nombre oficial, asegurar el título en pantalla
+            if (datosCargados.length > 0 && datosCargados[0].nombre) {
+                nombreEstacion = datosCargados[0].nombre;
+                actualizarTitulo();
+            }
+
+            estado.innerText = `Mostrando ${datosCargados.length.toLocaleString()} lecturas recuperadas del servidor.`;
+            dibujarGrafico(datosCargados);
         } catch (err) {
             estado.innerText = `⚠️ ${err.message}`;
         }
     }
 
+    // Modificación 5: Descarga directa del CSV incluyendo la columna 'nombre'
+    function descargarCsv() {
+        if (datosCargados && datosCargados.length > 0) {
+            let csv = "codigo_bna,nombre,variable,fecha_hora,valor\n";
+            datosCargados.forEach(d => {
+                const nomLimpio = (d.nombre || nombreEstacion || "").replace(/"/g, '""');
+                csv += `"${d.codigo_bna}","${nomLimpio}","${d.variable}","${d.fecha_str}",${d.valor}\n`;
+            });
+
+            const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement("a");
+            a.href = url;
+            a.download = `DGA_${codigo}_${dias}dias.csv`;
+            a.click();
+            URL.revokeObjectURL(url);
+        } else {
+            // Respaldo vía endpoint del servidor si aún no se termina de cargar
+            window.location.href = `/api/descargar_csv?codigo=${encodeURIComponent(codigo)}&dias=${dias}`;
+        }
+    }
+
     function dibujarGrafico(datos) {
-        // Agrupar por variable hidrológica
         const series = {};
         const fechasSet = new Set();
 
@@ -99,7 +134,7 @@
                         ticks: {
                             maxTicksLimit: 12,
                             callback: function(val, index) {
-                                return labels[index]; // Forzar DD-MM-YYYY
+                                return labels[index]; // Formato DD-MM-YYYY
                             }
                         },
                         grid: { display: false }
