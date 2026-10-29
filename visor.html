@@ -21,11 +21,9 @@
 <div class="card">
     <div class="header">
         <div>
-            <!-- Modificación 1: Plantilla con {{NOMBRE}} junto al código BNA -->
-            <h1 id="titulo">Estación BNA: {{CODIGO}} - {{NOMBRE}} (Últimos {{DIAS}} días)</h1>
+            <h1 id="titulo">Estación BNA: <span id="codText">{{CODIGO}}</span><span id="nomText"></span> (Últimos <span id="diasText">{{DIAS}}</span> días)</h1>
             <div id="estado">Cargando mediciones desde SQLite / DGA...</div>
         </div>
-        <!-- Modificación 2: Evento para descargar con columna 'nombre' -->
         <a id="btnCsv" href="#" class="btn" onclick="descargarCsv(); return false;">📥 Descargar CSV</a>
     </div>
 
@@ -37,16 +35,43 @@
 <script>
     const urlParams = new URLSearchParams(window.location.search);
     const codigo = urlParams.get('codigo') || "{{CODIGO}}";
-    let nombreEstacion = urlParams.get('nombre') || "{{NOMBRE}}";
     const dias = urlParams.get('dias') || "{{DIAS}}";
+    let nombreEstacion = "{{NOMBRE}}";
     let datosCargados = [];
 
-    // Modificación 3: Actualizar título dinámicamente con el nombre
+    // Limpiar si vino el tag crudo sin procesar
+    if (nombreEstacion === "{{" + "NOMBRE" + "}}") {
+        nombreEstacion = "";
+    }
+
     function actualizarTitulo() {
-        const textoNombre = (nombreEstacion && nombreEstacion !== "{{NOMBRE}}") ? ` - ${nombreEstacion}` : "";
-        document.getElementById("titulo").innerText = `Estación BNA: ${codigo}${textoNombre} (Últimos ${dias} días)`;
+        document.getElementById("codText").innerText = codigo;
+        document.getElementById("diasText").innerText = dias;
+        const nomEl = document.getElementById("nomText");
+        if (nomEl) {
+            nomEl.innerText = (nombreEstacion && nombreEstacion.trim() !== "") ? ` - ${nombreEstacion}` : "";
+        }
     }
     actualizarTitulo();
+
+    // Consulta inmediata del nombre oficial (independiente de si existen lecturas o no)
+    async function asegurarNombre() {
+        if (!nombreEstacion || nombreEstacion.trim() === "") {
+            try {
+                const resInfo = await fetch(`/api/info_estacion?codigo=${encodeURIComponent(codigo)}`);
+                if (resInfo.ok) {
+                    const info = await resInfo.json();
+                    if (info.nombre && info.nombre.trim() !== "") {
+                        nombreEstacion = info.nombre;
+                        actualizarTitulo();
+                    }
+                }
+            } catch (e) {
+                console.log("No se pudo obtener información de la estación", e);
+            }
+        }
+    }
+    asegurarNombre();
 
     async function cargarDatos() {
         const estado = document.getElementById("estado");
@@ -55,7 +80,6 @@
             if (!res.ok) throw new Error("No se encontraron registros para esta estación.");
             datosCargados = await res.json();
 
-            // Modificación 4: Si los datos traen el nombre oficial, asegurar el título en pantalla
             if (datosCargados.length > 0 && datosCargados[0].nombre) {
                 nombreEstacion = datosCargados[0].nombre;
                 actualizarTitulo();
@@ -68,7 +92,6 @@
         }
     }
 
-    // Modificación 5: Descarga directa del CSV incluyendo la columna 'nombre'
     function descargarCsv() {
         if (datosCargados && datosCargados.length > 0) {
             let csv = "codigo_bna,nombre,variable,fecha_hora,valor\n";
@@ -85,7 +108,6 @@
             a.click();
             URL.revokeObjectURL(url);
         } else {
-            // Respaldo vía endpoint del servidor si aún no se termina de cargar
             window.location.href = `/api/descargar_csv?codigo=${encodeURIComponent(codigo)}&dias=${dias}`;
         }
     }
@@ -95,7 +117,7 @@
         const fechasSet = new Set();
 
         datos.forEach(d => {
-            const fechaCorta = d.fecha_str.split(" ")[0]; // Formato DD-MM-YYYY
+            const fechaCorta = d.fecha_str.split(" ")[0];
             fechasSet.add(fechaCorta);
             if (!series[d.variable]) series[d.variable] = {};
             series[d.variable][fechaCorta] = d.valor;
@@ -134,7 +156,7 @@
                         ticks: {
                             maxTicksLimit: 12,
                             callback: function(val, index) {
-                                return labels[index]; // Formato DD-MM-YYYY
+                                return labels[index];
                             }
                         },
                         grid: { display: false }
