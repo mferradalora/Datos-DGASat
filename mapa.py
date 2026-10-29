@@ -14,13 +14,11 @@ from branca.element import Element
 import geopandas as gpd
 import pandas as pd
 import folium
-import urllib.parse
 
 carpeta_data = Path("data")
 path_csv = carpeta_data / "catalogo_completo_dga.csv"
 path_regiones = carpeta_data / "Regiones_Chile.geojson"
 
-# Lista de Regiones de Norte a Sur y sus palabras clave para mapeo
 REGIONES_CHILE = {
     "Arica y Parinacota": ["arica", "parinacota"],
     "Tarapacá": ["tarapaca"],
@@ -68,7 +66,6 @@ print("🔄 1. Cargando catálogos y límites regionales...")
 df_csv = pd.read_csv(path_csv, dtype={"codigo_bna": str})
 df_csv.columns = [str(c).strip().lower() for c in df_csv.columns]
 
-# Limpieza de coordenadas geográficas
 df_csv["latitud"] = pd.to_numeric(df_csv["latitud"], errors="coerce")
 df_csv["longitud"] = pd.to_numeric(df_csv["longitud"], errors="coerce")
 df_csv = df_csv.dropna(subset=["latitud", "longitud"]).copy()
@@ -111,14 +108,12 @@ for region_nom, claves in REGIONES_CHILE.items():
     reg_key = normalizar_texto(region_nom).replace(' ', '_')
     capa_reg = filtrar_poligono_region(gdf_regiones_raw, claves)
 
-    # Filtrar estaciones del CSV que pertenezcan a esta región
     patron_claves = "|".join([normalizar_texto(k) for k in claves])
     df_reg = df_csv[df_csv["region_norm"].str.contains(patron_claves, na=False, regex=True)].copy()
 
     if capa_reg.empty and df_reg.empty:
         continue
 
-    # Calcular encuadre geográfico (bounds)
     if not capa_reg.empty:
         xmin, ymin, xmax, ymax = capa_reg.total_bounds
         bounds_reg = [[ymin, xmin], [ymax, xmax]]
@@ -126,11 +121,8 @@ for region_nom, claves in REGIONES_CHILE.items():
         bounds_reg = [[df_reg["latitud"].min(), df_reg["longitud"].min()],
                       [df_reg["latitud"].max(), df_reg["longitud"].max()]]
 
-    # FeatureGroup único para la región (contiene polígono y marcadores)
     fg_region = folium.FeatureGroup(name=f"Región {region_nom}", overlay=True, show=True, control=False)
 
-    # 1. Polígono del límite regional
-    # interactive=False desactiva el sombreado hover y eventos del mouse al pasar por encima
     if not capa_reg.empty:
         folium.GeoJson(
             capa_reg,
@@ -144,13 +136,12 @@ for region_nom, claves in REGIONES_CHILE.items():
             }
         ).add_to(fg_region)
 
-    # 2. Marcadores de estaciones de la región
     for _, row in df_reg.iterrows():
         estilo = obtener_color_tipo(row.get("tipo_estacion", ""))
         nombre_estacion = str(row.get("nombre", "")).strip()
-        nombre_url = urllib.parse.quote(nombre_estacion)
         codigo_bna = str(row.get("codigo_bna", "")).strip()
 
+        # Enlace exclusivo con código y dias=90 (sin nombre en la URL)
         popup_html = f"""
         <div style="font-family: Arial, sans-serif; font-size: 12px; min-width: 210px;">
             <b style="color: {estilo['color']}; font-size: 13px;">{nombre_estacion}</b><br>
@@ -162,7 +153,7 @@ for region_nom, claves in REGIONES_CHILE.items():
             <b>Coordenadas:</b> {row.get('latitud', ''):.4f}, {row.get('longitud', ''):.4f}
 
             <div style="margin-top: 10px; padding-top: 8px; border-top: 1px solid #e2e8f0; text-align: center;">
-                <a href="https://datos-dgasat.onrender.com/visor?codigo={codigo_bna}&nombre={nombre_url}&dias=90" 
+                <a href="https://datos-dgasat.onrender.com/visor?codigo={codigo_bna}&dias=90" 
                    target="_blank" 
                    style="display: block; background-color: #0284c7; color: white; padding: 7px 10px; font-size: 11px; font-weight: bold; text-decoration: none; border-radius: 4px; box-shadow: 0 1px 2px rgba(0,0,0,0.15);">
                     📥 Descargar datos (Últimos 3 meses)
@@ -193,7 +184,6 @@ for region_nom, claves in REGIONES_CHILE.items():
     }
     options_html += f'<option value="{reg_key}">{region_nom} ({len(df_reg)})</option>\n'
 
-# 4. Inyección del selector exclusivo por Región
 menu_control_html = f"""
 <div style="position: fixed; top: 14px; left: 60px; z-index: 1000; background: white; padding: 12px 16px; border-radius: 8px; box-shadow: 0 2px 12px rgba(0,0,0,0.25); font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; min-width: 250px;">
     <div style="font-weight: bold; font-size: 14px; color: #0284c7; margin-bottom: 8px;">💧 Red DGASat Chile</div>
@@ -235,7 +225,6 @@ function cambiarRegion(regKey) {{
 </script>
 """
 
-# 5. Inyección de Leyenda Temática
 leyenda_html = """
 <div style="position: fixed; bottom: 25px; right: 12px; z-index: 1000; background: white; padding: 10px 14px; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.25); font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; font-size: 11px;">
     <div style="font-weight: bold; font-size: 12px; color: #1e293b; margin-bottom: 6px;">Simbología DGA</div>
