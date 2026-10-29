@@ -1,10 +1,10 @@
 # 💧 Datos-DGASat: Monitor e Inventario de Estaciones DGA Chile
 
-Plataforma integral de cartografía interactiva, almacenamiento en base de datos local y extracción automatizada de series de tiempo de la red hidrométrica, meteorológica y subterránea de la **Dirección General de Aguas (DGA)** del Ministerio de Obras Públicas de Chile (plataformas SNIA / DGASat).
+Plataforma integral de cartografía interactiva, almacenamiento en base de datos local, visualización y descarga de series de tiempo de los datos de la red de estaciones DGASatel de la **Dirección General de Aguas (DGA)** del Ministerio de Obras Públicas de Chile. La información presentada es extraída directamente de los servicios **Hidrolínea (Mapa en línea) [https://www.mop.gob.cl/serviciosmop/hidrolinea-mapa-en-linea/](https://www.mop.gob.cl/serviciosmop/hidrolinea-mapa-en-linea/ )** y **DGASatel [https://www.mop.gob.cl/serviciosmop/dgasatel/](https://www.mop.gob.cl/serviciosmop/dgasatel/)** de la DGA.
 
 ---
 
-## 🗺️ Enlaces del Proyecto en Producción
+## 🗺️ Enlaces del Proyecto
 
 * **Mapa Interactivo Nacional (GitHub Pages):**  
   👉 **[https://mferradalora.github.io/Datos-DGASat/](https://mferradalora.github.io/Datos-DGASat/)**
@@ -15,7 +15,7 @@ Plataforma integral de cartografía interactiva, almacenamiento en base de datos
 
 ## ⚙️ ¿Cómo Funciona el Proyecto?
 
-El sistema opera bajo una arquitectura desacoplada y eficiente diseñada para evitar la saturación y los tiempos de espera (*timeouts*) del servidor oficial de la DGA:
+El sistema opera bajo una arquitectura desacoplada diseñada para evitar la saturación y los tiempos de espera (*timeouts*) del servidor oficial de la DGA:
 
 ```text
 [ Mapa en GitHub Pages ] (index.html)
